@@ -63,12 +63,18 @@ async function run() {
       repo: repo,
       issue_number: number
     })
-  ).data.find(comment => comment.body.includes(footer));
+  ).data.find(comment => comment.body.includes(header));
 
   if (applicableChecklistPaths.length > 0) {
     const body = [
       `${header}\n\n`,
-      ...applicableChecklistPaths.map(formatItemsForPath),
+      ...applicableChecklistPaths.map(([path, items]) => {
+        return [
+          `For files matching \`${path}\`:\n`,
+          ...items.map(item => `- [ ] ${item}\n`),
+          "\n"
+        ].join("");
+      }),
       `\n${footer}`
     ].join("");
 

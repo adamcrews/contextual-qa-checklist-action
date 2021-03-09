@@ -186,7 +186,703 @@ function getInput(name, options) {
     if (options && options.required && !val) {
         throw new Error(`Input required and not supplied: ${name}`);
     }
-    return val.trim();
+
+    return this.chomping === Chomp.STRIP ? str : str + '\n';
+  }
+
+  parseBlockHeader(start) {
+    const {
+      src
+    } = this.context;
+    let offset = start + 1;
+    let bi = '';
+
+    while (true) {
+      const ch = src[offset];
+
+      switch (ch) {
+        case '-':
+          this.chomping = Chomp.STRIP;
+          break;
+
+        case '+':
+          this.chomping = Chomp.KEEP;
+          break;
+
+        case '0':
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9':
+          bi += ch;
+          break;
+
+        default:
+          this.blockIndent = Number(bi) || null;
+          this.header = new _Range.default(start, offset);
+          return offset;
+      }
+
+      offset += 1;
+    }
+  }
+
+  parseBlockValue(start) {
+    const {
+      indent,
+      src
+    } = this.context;
+    let offset = start;
+    let valueEnd = start;
+    let bi = this.blockIndent ? indent + this.blockIndent - 1 : indent;
+    let minBlockIndent = 1;
+
+    for (let ch = src[offset]; ch === '\n'; ch = src[offset]) {
+      offset += 1;
+      if (_Node.default.atDocumentBoundary(src, offset)) break;
+
+      const end = _Node.default.endOfBlockIndent(src, bi, offset); // should not include tab?
+
+
+      if (end === null) break;
+
+      if (!this.blockIndent) {
+        // no explicit block indent, none yet detected
+        const lineIndent = end - (offset + indent);
+
+        if (src[end] !== '\n') {
+          // first line with non-whitespace content
+          if (lineIndent < minBlockIndent) {
+            offset -= 1;
+            break;
+          }
+
+          this.blockIndent = lineIndent;
+          bi = indent + this.blockIndent - 1;
+        } else if (lineIndent > minBlockIndent) {
+          // empty line with more whitespace
+          minBlockIndent = lineIndent;
+        }
+      }
+
+      if (src[end] === '\n') {
+        offset = end;
+      } else {
+        offset = valueEnd = _Node.default.endOfLine(src, end);
+      }
+    }
+
+    if (this.chomping !== Chomp.KEEP) {
+      offset = src[valueEnd] ? valueEnd + 1 : valueEnd;
+    }
+
+    this.valueRange = new _Range.default(start + 1, offset);
+    return offset;
+  }
+  /**
+   * Parses a block value from the source
+   *
+   * Accepted forms are:
+   * ```
+   * BS
+   * block
+   * lines
+   *
+   * BS #comment
+   * block
+   * lines
+   * ```
+   * where the block style BS matches the regexp `[|>][-+1-9]*` and block lines
+   * are empty or have an indent level greater than `indent`.
+   *
+   * @param {ParseContext} context
+   * @param {number} start - Index of first character
+   * @returns {number} - Index of the character after this block
+   */
+
+
+  parse(context, start) {
+    this.context = context;
+    const {
+      src
+    } = context;
+    let offset = this.parseBlockHeader(start);
+    offset = _Node.default.endOfWhiteSpace(src, offset);
+    offset = this.parseComment(offset);
+    offset = this.parseBlockValue(offset);
+    return offset;
+  }
+
+  setOrigRanges(cr, offset) {
+    offset = super.setOrigRanges(cr, offset);
+    return this.header ? this.header.setOrigRange(cr, offset) : offset;
+  }
+
+}
+
+exports.default = BlockValue;
+
+/***/ }),
+
+/***/ 29:
+/***/ (function(__unusedmodule, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.default = void 0;
+
+var _toJSON = _interopRequireDefault(__webpack_require__(923));
+
+var _Collection = _interopRequireDefault(__webpack_require__(380));
+
+var _Scalar = _interopRequireDefault(__webpack_require__(515));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+// Published as 'yaml/seq'
+function asItemIndex(key) {
+  let idx = key instanceof _Scalar.default ? key.value : key;
+  if (idx && typeof idx === 'string') idx = Number(idx);
+  return Number.isInteger(idx) && idx >= 0 ? idx : null;
+}
+
+class YAMLSeq extends _Collection.default {
+  add(value) {
+    this.items.push(value);
+  }
+
+  delete(key) {
+    const idx = asItemIndex(key);
+    if (typeof idx !== 'number') return false;
+    const del = this.items.splice(idx, 1);
+    return del.length > 0;
+  }
+
+  get(key, keepScalar) {
+    const idx = asItemIndex(key);
+    if (typeof idx !== 'number') return undefined;
+    const it = this.items[idx];
+    return !keepScalar && it instanceof _Scalar.default ? it.value : it;
+  }
+
+  has(key) {
+    const idx = asItemIndex(key);
+    return typeof idx === 'number' && idx < this.items.length;
+  }
+
+  set(key, value) {
+    const idx = asItemIndex(key);
+    if (typeof idx !== 'number') throw new Error(`Expected a valid index, not ${key}.`);
+    this.items[idx] = value;
+  }
+
+  toJSON(_, ctx) {
+    const seq = [];
+    if (ctx && ctx.onCreate) ctx.onCreate(seq);
+    let i = 0;
+
+    for (const item of this.items) seq.push((0, _toJSON.default)(item, String(i++), ctx));
+
+    return seq;
+  }
+
+  toString(ctx, onComment, onChompKeep) {
+    if (!ctx) return JSON.stringify(this);
+    return super.toString(ctx, {
+      blockItem: n => n.type === 'comment' ? n.str : `- ${n.str}`,
+      flowChars: {
+        start: '[',
+        end: ']'
+      },
+      isMap: false,
+      itemIndent: (ctx.indent || '') + '  '
+    }, onComment, onChompKeep);
+  }
+
+}
+
+exports.default = YAMLSeq;
+
+/***/ }),
+
+/***/ 39:
+/***/ (function(module) {
+
+"use strict";
+
+module.exports = opts => {
+	opts = opts || {};
+
+	const env = opts.env || process.env;
+	const platform = opts.platform || process.platform;
+
+	if (platform !== 'win32') {
+		return 'PATH';
+	}
+
+	return Object.keys(env).find(x => x.toUpperCase() === 'PATH') || 'Path';
+};
+
+
+/***/ }),
+
+/***/ 41:
+/***/ (function(__unusedmodule, exports) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.getLinePos = getLinePos;
+exports.getLine = getLine;
+exports.getPrettyContext = getPrettyContext;
+
+function findLineStarts(src) {
+  const ls = [0];
+  let offset = src.indexOf('\n');
+
+  while (offset !== -1) {
+    offset += 1;
+    ls.push(offset);
+    offset = src.indexOf('\n', offset);
+  }
+
+  return ls;
+}
+
+function getSrcInfo(cst) {
+  let lineStarts, src;
+
+  if (typeof cst === 'string') {
+    lineStarts = findLineStarts(cst);
+    src = cst;
+  } else {
+    if (Array.isArray(cst)) cst = cst[0];
+
+    if (cst && cst.context) {
+      if (!cst.lineStarts) cst.lineStarts = findLineStarts(cst.context.src);
+      lineStarts = cst.lineStarts;
+      src = cst.context.src;
+    }
+  }
+
+  return {
+    lineStarts,
+    src
+  };
+}
+/**
+ * @typedef {Object} LinePos - One-indexed position in the source
+ * @property {number} line
+ * @property {number} col
+ */
+
+/**
+ * Determine the line/col position matching a character offset.
+ *
+ * Accepts a source string or a CST document as the second parameter. With
+ * the latter, starting indices for lines are cached in the document as
+ * `lineStarts: number[]`.
+ *
+ * Returns a one-indexed `{ line, col }` location if found, or
+ * `undefined` otherwise.
+ *
+ * @param {number} offset
+ * @param {string|Document|Document[]} cst
+ * @returns {?LinePos}
+ */
+
+
+function getLinePos(offset, cst) {
+  if (typeof offset !== 'number' || offset < 0) return null;
+  const {
+    lineStarts,
+    src
+  } = getSrcInfo(cst);
+  if (!lineStarts || !src || offset > src.length) return null;
+
+  for (let i = 0; i < lineStarts.length; ++i) {
+    const start = lineStarts[i];
+
+    if (offset < start) {
+      return {
+        line: i,
+        col: offset - lineStarts[i - 1] + 1
+      };
+    }
+
+    if (offset === start) return {
+      line: i + 1,
+      col: 1
+    };
+  }
+
+  const line = lineStarts.length;
+  return {
+    line,
+    col: offset - lineStarts[line - 1] + 1
+  };
+}
+/**
+ * Get a specified line from the source.
+ *
+ * Accepts a source string or a CST document as the second parameter. With
+ * the latter, starting indices for lines are cached in the document as
+ * `lineStarts: number[]`.
+ *
+ * Returns the line as a string if found, or `null` otherwise.
+ *
+ * @param {number} line One-indexed line number
+ * @param {string|Document|Document[]} cst
+ * @returns {?string}
+ */
+
+
+function getLine(line, cst) {
+  const {
+    lineStarts,
+    src
+  } = getSrcInfo(cst);
+  if (!lineStarts || !(line >= 1) || line > lineStarts.length) return null;
+  const start = lineStarts[line - 1];
+  let end = lineStarts[line]; // undefined for last line; that's ok for slice()
+
+  while (end && end > start && src[end - 1] === '\n') --end;
+
+  return src.slice(start, end);
+}
+/**
+ * Pretty-print the starting line from the source indicated by the range `pos`
+ *
+ * Trims output to `maxWidth` chars while keeping the starting column visible,
+ * using `…` at either end to indicate dropped characters.
+ *
+ * Returns a two-line string (or `null`) with `\n` as separator; the second line
+ * will hold appropriately indented `^` marks indicating the column range.
+ *
+ * @param {Object} pos
+ * @param {LinePos} pos.start
+ * @param {LinePos} [pos.end]
+ * @param {string|Document|Document[]*} cst
+ * @param {number} [maxWidth=80]
+ * @returns {?string}
+ */
+
+
+function getPrettyContext({
+  start,
+  end
+}, cst, maxWidth = 80) {
+  let src = getLine(start.line, cst);
+  if (!src) return null;
+  let {
+    col
+  } = start;
+
+  if (src.length > maxWidth) {
+    if (col <= maxWidth - 10) {
+      src = src.substr(0, maxWidth - 1) + '…';
+    } else {
+      const halfWidth = Math.round(maxWidth / 2);
+      if (src.length > col + halfWidth) src = src.substr(0, col + halfWidth - 1) + '…';
+      col -= src.length - maxWidth;
+      src = '…' + src.substr(1 - maxWidth);
+    }
+  }
+
+  let errLen = 1;
+  let errEnd = '';
+
+  if (end) {
+    if (end.line === start.line && col + (end.col - start.col) <= maxWidth + 1) {
+      errLen = end.col - start.col;
+    } else {
+      errLen = Math.min(src.length + 1, maxWidth) - col;
+      errEnd = '…';
+    }
+  }
+
+  const offset = col > 1 ? ' '.repeat(col - 1) : '';
+  const err = '^'.repeat(errLen);
+  return `${src}\n${offset}${err}${errEnd}`;
+}
+
+/***/ }),
+
+/***/ 47:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+
+module.exports = factory;
+
+const Octokit = __webpack_require__(402);
+const registerPlugin = __webpack_require__(855);
+
+function factory(plugins) {
+  const Api = Octokit.bind(null, plugins || []);
+  Api.plugin = registerPlugin.bind(null, plugins || []);
+  return Api;
+}
+
+
+/***/ }),
+
+/***/ 49:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+
+"use strict";
+
+const os = __webpack_require__(87);
+const execa = __webpack_require__(955);
+
+// Reference: https://www.gaijin.at/en/lstwinver.php
+const names = new Map([
+	['10.0', '10'],
+	['6.3', '8.1'],
+	['6.2', '8'],
+	['6.1', '7'],
+	['6.0', 'Vista'],
+	['5.2', 'Server 2003'],
+	['5.1', 'XP'],
+	['5.0', '2000'],
+	['4.9', 'ME'],
+	['4.1', '98'],
+	['4.0', '95']
+]);
+
+const windowsRelease = release => {
+	const version = /\d+\.\d/.exec(release || os.release());
+
+	if (release && !version) {
+		throw new Error('`release` argument doesn\'t match `n.n`');
+	}
+
+	const ver = (version || [])[0];
+
+	// Server 2008, 2012 and 2016 versions are ambiguous with desktop versions and must be detected at runtime.
+	// If `release` is omitted or we're on a Windows system, and the version number is an ambiguous version
+	// then use `wmic` to get the OS caption: https://msdn.microsoft.com/en-us/library/aa394531(v=vs.85).aspx
+	// If the resulting caption contains the year 2008, 2012 or 2016, it is a server version, so return a server OS name.
+	if ((!release || release === os.release()) && ['6.1', '6.2', '6.3', '10.0'].includes(ver)) {
+		const stdout = execa.sync('wmic', ['os', 'get', 'Caption']).stdout || '';
+		const year = (stdout.match(/2008|2012|2016/) || [])[0];
+		if (year) {
+			return `Server ${year}`;
+		}
+	}
+
+	return names.get(ver);
+};
+
+module.exports = windowsRelease;
+
+
+/***/ }),
+
+/***/ 77:
+/***/ (function(__unusedmodule, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.default = void 0;
+
+var _map = _interopRequireDefault(__webpack_require__(732));
+
+var _seq = _interopRequireDefault(__webpack_require__(767));
+
+var _Scalar = _interopRequireDefault(__webpack_require__(515));
+
+var _string = __webpack_require__(591);
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+const schema = [_map.default, _seq.default, {
+  identify: value => typeof value === 'string',
+  default: true,
+  tag: 'tag:yaml.org,2002:str',
+  resolve: _string.resolveString,
+  stringify: value => JSON.stringify(value)
+}, {
+  identify: value => value == null,
+  createNode: (schema, value, ctx) => ctx.wrapScalars ? new _Scalar.default(null) : null,
+  default: true,
+  tag: 'tag:yaml.org,2002:null',
+  test: /^null$/,
+  resolve: () => null,
+  stringify: value => JSON.stringify(value)
+}, {
+  identify: value => typeof value === 'boolean',
+  default: true,
+  tag: 'tag:yaml.org,2002:bool',
+  test: /^true$/,
+  resolve: () => true,
+  stringify: value => JSON.stringify(value)
+}, {
+  identify: value => typeof value === 'boolean',
+  default: true,
+  tag: 'tag:yaml.org,2002:bool',
+  test: /^false$/,
+  resolve: () => false,
+  stringify: value => JSON.stringify(value)
+}, {
+  identify: value => typeof value === 'number',
+  default: true,
+  tag: 'tag:yaml.org,2002:int',
+  test: /^-?(?:0|[1-9][0-9]*)$/,
+  resolve: str => parseInt(str, 10),
+  stringify: value => JSON.stringify(value)
+}, {
+  identify: value => typeof value === 'number',
+  default: true,
+  tag: 'tag:yaml.org,2002:float',
+  test: /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*)?(?:[eE][-+]?[0-9]+)?$/,
+  resolve: str => parseFloat(str),
+  stringify: value => JSON.stringify(value)
+}];
+
+schema.scalarFallback = str => {
+  throw new SyntaxError(`Unresolved plain scalar ${JSON.stringify(str)}`);
+};
+
+var _default = schema;
+exports.default = _default;
+
+/***/ }),
+
+/***/ 82:
+/***/ (function(__unusedmodule, exports) {
+
+"use strict";
+
+// We use any as a valid input type
+/* eslint-disable @typescript-eslint/no-explicit-any */
+Object.defineProperty(exports, "__esModule", { value: true });
+/**
+ * Sanitizes an input into a string so it can be passed into issueCommand safely
+ * @param input input to sanitize into a string
+ */
+function toCommandValue(input) {
+    if (input === null || input === undefined) {
+        return '';
+    }
+    else if (typeof input === 'string' || input instanceof String) {
+        return input;
+    }
+    return JSON.stringify(input);
+}
+exports.toCommandValue = toCommandValue;
+//# sourceMappingURL=utils.js.map
+
+/***/ }),
+
+/***/ 87:
+/***/ (function(module) {
+
+module.exports = require("os");
+
+/***/ }),
+
+/***/ 93:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+
+module.exports = minimatch
+minimatch.Minimatch = Minimatch
+
+var path = { sep: '/' }
+try {
+  path = __webpack_require__(622)
+} catch (er) {}
+
+var GLOBSTAR = minimatch.GLOBSTAR = Minimatch.GLOBSTAR = {}
+var expand = __webpack_require__(306)
+
+var plTypes = {
+  '!': { open: '(?:(?!(?:', close: '))[^/]*?)'},
+  '?': { open: '(?:', close: ')?' },
+  '+': { open: '(?:', close: ')+' },
+  '*': { open: '(?:', close: ')*' },
+  '@': { open: '(?:', close: ')' }
+}
+
+// any single thing other than /
+// don't need to escape / when using new RegExp()
+var qmark = '[^/]'
+
+// * => any number of characters
+var star = qmark + '*?'
+
+// ** when dots are allowed.  Anything goes, except .. and .
+// not (^ or / followed by one or two dots followed by $ or /),
+// followed by anything, any number of times.
+var twoStarDot = '(?:(?!(?:\\\/|^)(?:\\.{1,2})($|\\\/)).)*?'
+
+// not a ^ or / followed by a dot,
+// followed by anything, any number of times.
+var twoStarNoDot = '(?:(?!(?:\\\/|^)\\.).)*?'
+
+// characters that need to be escaped in RegExp.
+var reSpecials = charSet('().*{}+?[]^$\\!')
+
+// "abc" -> { a:true, b:true, c:true }
+function charSet (s) {
+  return s.split('').reduce(function (set, c) {
+    set[c] = true
+    return set
+  }, {})
+}
+
+// normalizes slashes.
+var slashSplit = /\/+/
+
+minimatch.filter = filter
+function filter (pattern, options) {
+  options = options || {}
+  return function (p, i, list) {
+    return minimatch(p, pattern, options)
+  }
+}
+
+function ext (a, b) {
+  a = a || {}
+  b = b || {}
+  var t = {}
+  Object.keys(b).forEach(function (k) {
+    t[k] = b[k]
+  })
+  Object.keys(a).forEach(function (k) {
+    t[k] = a[k]
+  })
+  return t
+}
+
+minimatch.defaults = function (def) {
+  if (!def || !Object.keys(def).length) return minimatch
+
+  var orig = minimatch
+
+  var m = function minimatch (p, pattern, options) {
+    return orig.minimatch(p, pattern, ext(def, options))
+  }
+
+  m.Minimatch = function Minimatch (pattern, options) {
+    return new orig.Minimatch(pattern, ext(def, options))
+  }
+
+  return m
 }
 exports.getInput = getInput;
 /**
@@ -1430,6 +2126,7 @@ class Octokit {
         } : null));
       }
 
+<<<<<<< HEAD
     };
     return OctokitWithDefaults;
   }
@@ -1439,6 +2136,46 @@ class Octokit {
    * @example
    * const API = Octokit.plugin(plugin1, plugin2, plugin3, ...)
    */
+=======
+/***/ 102:
+/***/ (function(__unusedmodule, exports, __webpack_require__) {
+
+"use strict";
+
+// For internal use, subject to change.
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (Object.hasOwnProperty.call(mod, k)) result[k] = mod[k];
+    result["default"] = mod;
+    return result;
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+// We use any as a valid input type
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const fs = __importStar(__webpack_require__(747));
+const os = __importStar(__webpack_require__(87));
+const utils_1 = __webpack_require__(82);
+function issueCommand(command, message) {
+    const filePath = process.env[`GITHUB_${command}`];
+    if (!filePath) {
+        throw new Error(`Unable to find environment variable for file command ${command}`);
+    }
+    if (!fs.existsSync(filePath)) {
+        throw new Error(`Missing file at path: ${filePath}`);
+    }
+    fs.appendFileSync(filePath, `${utils_1.toCommandValue(message)}${os.EOL}`, {
+        encoding: 'utf8'
+    });
+}
+exports.issueCommand = issueCommand;
+//# sourceMappingURL=file-command.js.map
+
+/***/ }),
+
+/***/ 118:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+>>>>>>> acd6293 (master: Making text slightly more concise)
 
 
   static plugin(...newPlugins) {
@@ -9375,6 +10112,7 @@ src[HYPHENRANGELOOSE] = '^\\s*(' + src[XRANGEPLAINLOOSE] + ')' +
 var STAR = R++
 src[STAR] = '(<|>)?=?\\s*\\*'
 
+<<<<<<< HEAD
 // Compile to actual regexp objects.
 // All are flag-free, unless they were created above with a flag.
 for (var i = 0; i < R; i++) {
@@ -9392,6 +10130,86 @@ function parse (version, options) {
       includePrerelease: false
     }
   }
+=======
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (Object.hasOwnProperty.call(mod, k)) result[k] = mod[k];
+    result["default"] = mod;
+    return result;
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const os = __importStar(__webpack_require__(87));
+const utils_1 = __webpack_require__(82);
+/**
+ * Commands
+ *
+ * Command Format:
+ *   ::name key=value,key=value::message
+ *
+ * Examples:
+ *   ::warning::This is the message
+ *   ::set-env name=MY_VAR::some value
+ */
+function issueCommand(command, properties, message) {
+    const cmd = new Command(command, properties, message);
+    process.stdout.write(cmd.toString() + os.EOL);
+}
+exports.issueCommand = issueCommand;
+function issue(name, message = '') {
+    issueCommand(name, {}, message);
+}
+exports.issue = issue;
+const CMD_STRING = '::';
+class Command {
+    constructor(command, properties, message) {
+        if (!command) {
+            command = 'missing.command';
+        }
+        this.command = command;
+        this.properties = properties;
+        this.message = message;
+    }
+    toString() {
+        let cmdStr = CMD_STRING + this.command;
+        if (this.properties && Object.keys(this.properties).length > 0) {
+            cmdStr += ' ';
+            let first = true;
+            for (const key in this.properties) {
+                if (this.properties.hasOwnProperty(key)) {
+                    const val = this.properties[key];
+                    if (val) {
+                        if (first) {
+                            first = false;
+                        }
+                        else {
+                            cmdStr += ',';
+                        }
+                        cmdStr += `${key}=${escapeProperty(val)}`;
+                    }
+                }
+            }
+        }
+        cmdStr += `${CMD_STRING}${escapeData(this.message)}`;
+        return cmdStr;
+    }
+}
+function escapeData(s) {
+    return utils_1.toCommandValue(s)
+        .replace(/%/g, '%25')
+        .replace(/\r/g, '%0D')
+        .replace(/\n/g, '%0A');
+}
+function escapeProperty(s) {
+    return utils_1.toCommandValue(s)
+        .replace(/%/g, '%25')
+        .replace(/\r/g, '%0D')
+        .replace(/\n/g, '%0A')
+        .replace(/:/g, '%3A')
+        .replace(/,/g, '%2C');
+}
+//# sourceMappingURL=command.js.map
+>>>>>>> acd6293 (master: Making text slightly more concise)
 
   if (version instanceof SemVer) {
     return version
@@ -10000,9 +10818,21 @@ function Range (range, options) {
     return new Range(range, options)
   }
 
+<<<<<<< HEAD
   this.options = options
   this.loose = !!options.loose
   this.includePrerelease = !!options.includePrerelease
+=======
+	// html4
+	if (!res && str) {
+		res = /<meta[\s]+?http-equiv=(['"])content-type\1[\s]+?content=(['"])(.+?)\2/i.exec(str);
+		if (!res) {
+			res = /<meta[\s]+?content=(['"])(.+?)\1[\s]+?http-equiv=(['"])content-type\3/i.exec(str);
+			if (res) {
+				res.pop(); // drop last quote
+			}
+		}
+>>>>>>> acd6293 (master: Making text slightly more concise)
 
   // First, split based on boolean or ||
   this.raw = range
@@ -11000,11 +11830,37 @@ TunnelingAgent.prototype.addRequest = function addRequest(req, host, port, local
   var self = this;
   var options = mergeOptions({request: req}, self.options, toOptions(host, port, localAddress));
 
+<<<<<<< HEAD
   if (self.sockets.length >= this.maxSockets) {
     // We are over limit so we'll add it to the queue.
     self.requests.push(options);
     return;
   }
+=======
+				// HTTP fetch step 5.5
+				switch (request.redirect) {
+					case 'error':
+						reject(new FetchError(`uri requested responds with a redirect, redirect mode is set to error: ${request.url}`, 'no-redirect'));
+						finalize();
+						return;
+					case 'manual':
+						// node-fetch-specific step: make manual redirect a bit easier to use by setting the Location header value to the resolved URL.
+						if (locationURL !== null) {
+							// handle corrupted header
+							try {
+								headers.set('Location', locationURL);
+							} catch (err) {
+								// istanbul ignore next: nodejs server prevent invalid response headers, we can't test this through normal request
+								reject(err);
+							}
+						}
+						break;
+					case 'follow':
+						// HTTP-redirect fetch step 2
+						if (locationURL === null) {
+							break;
+						}
+>>>>>>> acd6293 (master: Making text slightly more concise)
 
   // If we are under maxSockets create a new one.
   self.createSocket(options, function(socket) {
@@ -11013,9 +11869,26 @@ TunnelingAgent.prototype.addRequest = function addRequest(req, host, port, local
     socket.on('agentRemove', onCloseOrRemove);
     req.onSocket(socket);
 
+<<<<<<< HEAD
     function onFree() {
       self.emit('free', socket, options);
     }
+=======
+						// HTTP-redirect fetch step 6 (counter increment)
+						// Create a new Request object.
+						const requestOpts = {
+							headers: new Headers(request.headers),
+							follow: request.follow,
+							counter: request.counter + 1,
+							agent: request.agent,
+							compress: request.compress,
+							method: request.method,
+							body: request.body,
+							signal: request.signal,
+							timeout: request.timeout,
+							size: request.size
+						};
+>>>>>>> acd6293 (master: Making text slightly more concise)
 
     function onCloseOrRemove(err) {
       self.removeSocket(socket);
@@ -11406,6 +12279,7 @@ const windowsRelease = release => {
 
 	return names.get(ver);
 };
+<<<<<<< HEAD
 
 module.exports = windowsRelease;
 
@@ -11447,6 +12321,233 @@ function wrappy (fn, cb) {
     }
     return ret
   }
+=======
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (Object.hasOwnProperty.call(mod, k)) result[k] = mod[k];
+    result["default"] = mod;
+    return result;
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const command_1 = __webpack_require__(431);
+const file_command_1 = __webpack_require__(102);
+const utils_1 = __webpack_require__(82);
+const os = __importStar(__webpack_require__(87));
+const path = __importStar(__webpack_require__(622));
+/**
+ * The code to exit an action
+ */
+var ExitCode;
+(function (ExitCode) {
+    /**
+     * A code indicating that the action was successful
+     */
+    ExitCode[ExitCode["Success"] = 0] = "Success";
+    /**
+     * A code indicating that the action was a failure
+     */
+    ExitCode[ExitCode["Failure"] = 1] = "Failure";
+})(ExitCode = exports.ExitCode || (exports.ExitCode = {}));
+//-----------------------------------------------------------------------
+// Variables
+//-----------------------------------------------------------------------
+/**
+ * Sets env variable for this action and future actions in the job
+ * @param name the name of the variable to set
+ * @param val the value of the variable. Non-string values will be converted to a string via JSON.stringify
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function exportVariable(name, val) {
+    const convertedVal = utils_1.toCommandValue(val);
+    process.env[name] = convertedVal;
+    const filePath = process.env['GITHUB_ENV'] || '';
+    if (filePath) {
+        const delimiter = '_GitHubActionsFileCommandDelimeter_';
+        const commandValue = `${name}<<${delimiter}${os.EOL}${convertedVal}${os.EOL}${delimiter}`;
+        file_command_1.issueCommand('ENV', commandValue);
+    }
+    else {
+        command_1.issueCommand('set-env', { name }, convertedVal);
+    }
+}
+exports.exportVariable = exportVariable;
+/**
+ * Registers a secret which will get masked from logs
+ * @param secret value of the secret
+ */
+function setSecret(secret) {
+    command_1.issueCommand('add-mask', {}, secret);
+}
+exports.setSecret = setSecret;
+/**
+ * Prepends inputPath to the PATH (for this action and future actions)
+ * @param inputPath
+ */
+function addPath(inputPath) {
+    const filePath = process.env['GITHUB_PATH'] || '';
+    if (filePath) {
+        file_command_1.issueCommand('PATH', inputPath);
+    }
+    else {
+        command_1.issueCommand('add-path', {}, inputPath);
+    }
+    process.env['PATH'] = `${inputPath}${path.delimiter}${process.env['PATH']}`;
+}
+exports.addPath = addPath;
+/**
+ * Gets the value of an input.  The value is also trimmed.
+ *
+ * @param     name     name of the input to get
+ * @param     options  optional. See InputOptions.
+ * @returns   string
+ */
+function getInput(name, options) {
+    const val = process.env[`INPUT_${name.replace(/ /g, '_').toUpperCase()}`] || '';
+    if (options && options.required && !val) {
+        throw new Error(`Input required and not supplied: ${name}`);
+    }
+    return val.trim();
+}
+exports.getInput = getInput;
+/**
+ * Sets the value of an output.
+ *
+ * @param     name     name of the output to set
+ * @param     value    value to store. Non-string values will be converted to a string via JSON.stringify
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function setOutput(name, value) {
+    command_1.issueCommand('set-output', { name }, value);
+}
+exports.setOutput = setOutput;
+/**
+ * Enables or disables the echoing of commands into stdout for the rest of the step.
+ * Echoing is disabled by default if ACTIONS_STEP_DEBUG is not set.
+ *
+ */
+function setCommandEcho(enabled) {
+    command_1.issue('echo', enabled ? 'on' : 'off');
+}
+exports.setCommandEcho = setCommandEcho;
+//-----------------------------------------------------------------------
+// Results
+//-----------------------------------------------------------------------
+/**
+ * Sets the action status to failed.
+ * When the action exits it will be with an exit code of 1
+ * @param message add error issue message
+ */
+function setFailed(message) {
+    process.exitCode = ExitCode.Failure;
+    error(message);
+}
+exports.setFailed = setFailed;
+//-----------------------------------------------------------------------
+// Logging Commands
+//-----------------------------------------------------------------------
+/**
+ * Gets whether Actions Step Debug is on or not
+ */
+function isDebug() {
+    return process.env['RUNNER_DEBUG'] === '1';
+}
+exports.isDebug = isDebug;
+/**
+ * Writes debug message to user log
+ * @param message debug message
+ */
+function debug(message) {
+    command_1.issueCommand('debug', {}, message);
+}
+exports.debug = debug;
+/**
+ * Adds an error issue
+ * @param message error issue message. Errors will be converted to string via toString()
+ */
+function error(message) {
+    command_1.issue('error', message instanceof Error ? message.toString() : message);
+}
+exports.error = error;
+/**
+ * Adds an warning issue
+ * @param message warning issue message. Errors will be converted to string via toString()
+ */
+function warning(message) {
+    command_1.issue('warning', message instanceof Error ? message.toString() : message);
+}
+exports.warning = warning;
+/**
+ * Writes info to log with console.log.
+ * @param message info message
+ */
+function info(message) {
+    process.stdout.write(message + os.EOL);
+}
+exports.info = info;
+/**
+ * Begin an output group.
+ *
+ * Output until the next `groupEnd` will be foldable in this group
+ *
+ * @param name The name of the output group
+ */
+function startGroup(name) {
+    command_1.issue('group', name);
+}
+exports.startGroup = startGroup;
+/**
+ * End an output group.
+ */
+function endGroup() {
+    command_1.issue('endgroup');
+}
+exports.endGroup = endGroup;
+/**
+ * Wrap an asynchronous function call in a group.
+ *
+ * Returns the same type as the function itself.
+ *
+ * @param name The name of the group
+ * @param fn The function to wrap in the group
+ */
+function group(name, fn) {
+    return __awaiter(this, void 0, void 0, function* () {
+        startGroup(name);
+        let result;
+        try {
+            result = yield fn();
+        }
+        finally {
+            endGroup();
+        }
+        return result;
+    });
+}
+exports.group = group;
+//-----------------------------------------------------------------------
+// Wrapper action state
+//-----------------------------------------------------------------------
+/**
+ * Saves state for current action, the state can only be retrieved by this action's post job execution.
+ *
+ * @param     name     name of the state to store
+ * @param     value    value to store. Non-string values will be converted to a string via JSON.stringify
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function saveState(name, value) {
+    command_1.issueCommand('save-state', { name }, value);
+}
+exports.saveState = saveState;
+/**
+ * Gets the value of an state set by this action's main execution.
+ *
+ * @param     name     name of the state to get
+ * @returns   string
+ */
+function getState(name) {
+    return process.env[`STATE_${name}`] || '';
+>>>>>>> acd6293 (master: Making text slightly more concise)
 }
 
 
@@ -14862,6 +15963,187 @@ class QuoteDouble extends _Node.default {
 exports.default = QuoteDouble;
 
 /***/ }),
+<<<<<<< HEAD
+=======
+
+/***/ 731:
+/***/ (function(__unusedmodule, __unusedexports, __webpack_require__) {
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : new P(function (resolve) { resolve(result.value); }).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+const core = __webpack_require__(470);
+const github = __webpack_require__(469);
+const YAML = __webpack_require__(521);
+const minimatch = __webpack_require__(93);
+const { readFileSync } = __webpack_require__(747);
+const header = "Here are some automated tasks related to the code in this PR:";
+function getChecklistPaths() {
+    const inputFile = core.getInput("input-file");
+    const parsedFile = YAML.parse(readFileSync(inputFile, { encoding: "utf8" }));
+    return parsedFile.paths;
+}
+function run() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const issue = github.context.issue;
+        const ghToken = core.getInput("gh-token");
+        const client = new github.GitHub(ghToken);
+        const checklistPaths = getChecklistPaths();
+        const modifiedPaths = (yield client.pulls.listFiles({
+            owner: issue.owner,
+            repo: issue.repo,
+            pull_number: issue.number
+        })).data.map(file => file.filename);
+        const applicableChecklistPaths = Object.entries(checklistPaths).filter(([key, _]) => {
+            for (const modifiedPath of modifiedPaths) {
+                if (minimatch(modifiedPath, key)) {
+                    return true;
+                }
+            }
+            return false;
+        });
+        const existingComment = (yield client.issues.listComments({
+            owner: issue.owner,
+            repo: issue.repo,
+            issue_number: issue.number
+        })).data.find(comment => comment.body.includes(header));
+        if (applicableChecklistPaths.length > 0) {
+            const body = [
+                `${header}\n\n`,
+                ...applicableChecklistPaths.map(([path, items]) => {
+                    return [
+                        `For files matching \`${path}\`:\n`,
+                        ...items.map(item => `- [ ] ${item}\n`),
+                        "\n"
+                    ].join("");
+                })
+            ].join("");
+            if (existingComment) {
+                yield client.issues.updateComment({
+                    owner: issue.owner,
+                    repo: issue.repo,
+                    comment_id: existingComment.id,
+                    body
+                });
+            }
+            else {
+                yield client.issues.createComment({
+                    owner: issue.owner,
+                    repo: issue.repo,
+                    issue_number: issue.number,
+                    body
+                });
+            }
+        }
+        else {
+            if (existingComment) {
+                yield client.issues.deleteComment({
+                    owner: issue.owner,
+                    repo: issue.repo,
+                    comment_id: existingComment.id
+                });
+            }
+            console.log("No paths were modified that match checklist paths");
+        }
+    });
+}
+run().catch(err => core.setFailed(err.message));
+
+
+/***/ }),
+
+/***/ 732:
+/***/ (function(__unusedmodule, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.default = void 0;
+
+var _Map = _interopRequireDefault(__webpack_require__(684));
+
+var _parseMap = _interopRequireDefault(__webpack_require__(625));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function createMap(schema, obj, ctx) {
+  const map = new _Map.default();
+
+  if (obj instanceof Map) {
+    for (const [key, value] of obj) map.items.push(schema.createPair(key, value, ctx));
+  } else if (obj && typeof obj === 'object') {
+    for (const key of Object.keys(obj)) map.items.push(schema.createPair(key, obj[key], ctx));
+  }
+
+  return map;
+}
+
+var _default = {
+  createNode: createMap,
+  default: true,
+  nodeClass: _Map.default,
+  tag: 'tag:yaml.org,2002:map',
+  resolve: _parseMap.default
+};
+exports.default = _default;
+
+/***/ }),
+
+/***/ 734:
+/***/ (function(__unusedmodule, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.checkFlowCollectionEnd = checkFlowCollectionEnd;
+exports.checkKeyLength = checkKeyLength;
+exports.resolveComments = resolveComments;
+
+var _errors = __webpack_require__(405);
+
+var _constants = __webpack_require__(383);
+
+function checkFlowCollectionEnd(errors, cst) {
+  let char, name;
+
+  switch (cst.type) {
+    case _constants.Type.FLOW_MAP:
+      char = '}';
+      name = 'flow map';
+      break;
+
+    case _constants.Type.FLOW_SEQ:
+      char = ']';
+      name = 'flow sequence';
+      break;
+
+    default:
+      errors.push(new _errors.YAMLSemanticError(cst, 'Not a flow collection!?'));
+      return;
+  }
+
+  let lastItem;
+
+  for (let i = cst.items.length - 1; i >= 0; --i) {
+    const item = cst.items[i];
+
+    if (!item || item.type !== _constants.Type.COMMENT) {
+      lastItem = item;
+      break;
+    }
+  }
+>>>>>>> acd6293 (master: Making text slightly more concise)
 
 /***/ 2956:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
@@ -19102,7 +20384,7 @@ module.exports = require("zlib");;
 /************************************************************************/
 /******/ 	// The module cache
 /******/ 	var __webpack_module_cache__ = {};
-/******/ 	
+/******/
 /******/ 	// The require function
 /******/ 	function __nccwpck_require__(moduleId) {
 /******/ 		// Check if module is in cache
@@ -19116,7 +20398,7 @@ module.exports = require("zlib");;
 /******/ 			// no module.loaded needed
 /******/ 			exports: {}
 /******/ 		};
-/******/ 	
+/******/
 /******/ 		// Execute the module function
 /******/ 		var threw = true;
 /******/ 		try {
@@ -19125,11 +20407,11 @@ module.exports = require("zlib");;
 /******/ 		} finally {
 /******/ 			if(threw) delete __webpack_module_cache__[moduleId];
 /******/ 		}
-/******/ 	
+/******/
 /******/ 		// Return the exports of the module
 /******/ 		return module.exports;
 /******/ 	}
-/******/ 	
+/******/
 /************************************************************************/
 /******/ 	/* webpack/runtime/compat get default export */
 /******/ 	(() => {
@@ -19142,7 +20424,7 @@ module.exports = require("zlib");;
 /******/ 			return getter;
 /******/ 		};
 /******/ 	})();
-/******/ 	
+/******/
 /******/ 	/* webpack/runtime/define property getters */
 /******/ 	(() => {
 /******/ 		// define getter functions for harmony exports
@@ -19154,12 +20436,12 @@ module.exports = require("zlib");;
 /******/ 			}
 /******/ 		};
 /******/ 	})();
-/******/ 	
+/******/
 /******/ 	/* webpack/runtime/hasOwnProperty shorthand */
 /******/ 	(() => {
 /******/ 		__nccwpck_require__.o = (obj, prop) => (Object.prototype.hasOwnProperty.call(obj, prop))
 /******/ 	})();
-/******/ 	
+/******/
 /******/ 	/* webpack/runtime/make namespace object */
 /******/ 	(() => {
 /******/ 		// define __esModule on exports
@@ -19170,9 +20452,9 @@ module.exports = require("zlib");;
 /******/ 			Object.defineProperty(exports, '__esModule', { value: true });
 /******/ 		};
 /******/ 	})();
-/******/ 	
+/******/
 /******/ 	/* webpack/runtime/compat */
-/******/ 	
+/******/
 /******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";/************************************************************************/
 var __webpack_exports__ = {};
 // This entry need to be wrapped in an IIFE because it need to be in strict mode.
